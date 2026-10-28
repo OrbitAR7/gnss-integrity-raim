@@ -9,7 +9,7 @@ description = "Snapshot RAIM: chi-square fault detection and exclusion, protecti
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Hamoud Alshammari"}]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = ["numpy>=1.20", "scipy>=1.7"]
 
 [project.optional-dependencies]
