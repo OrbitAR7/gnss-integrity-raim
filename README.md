@@ -1,71 +1,35 @@
-# GNSS RAIM Implementation
+# gnss-integrity-raim
 
-A practical Python implementation of Receiver Autonomous Integrity Monitoring (RAIM) for evaluating GNSS positioning integrity in safety-critical applications.
+A compact Python implementation of snapshot **Receiver Autonomous Integrity Monitoring (RAIM)**: weighted least-squares positioning, chi-square fault detection, iterative fault exclusion, and slope-based protection levels. I wrote it to understand how integrity monitoring decides when a navigation solution should and should not be trusted.
 
-## What is RAIM?
+## What it does
 
-RAIM is a technique used in GPS/GNSS receivers to assess the integrity of positioning solutions without relying on external systems. It's essential in aviation and other applications where position accuracy must be guaranteed within specific bounds.
+- Weighted least-squares position and clock solution from pseudoranges
+- **Fault detection:** chi-square test on the weighted sum of squared residuals, with the threshold set by the false-alarm probability
+- **Fault exclusion:** removes the satellite with the largest residual and re-tests until the solution passes or too few satellites remain
+- **Protection levels:** slope-based HPL/VPL from the detection threshold and missed-detection probability
+- Simulation helpers for satellite geometry and fault injection, plus three example scripts
 
-This implementation provides:
-- **Fault Detection** using chi-square statistical testing
-- **Fault Exclusion** to identify and remove bad satellites
-- **Protection Level** calculation (HPL/VPL) for integrity monitoring
-- **Visualization tools** for understanding RAIM behavior
+## Stanford diagram
 
-## Key Visualizations
+![Stanford diagram](docs/stanford_diagram.png)
 
-### Stanford Diagram: The Four Integrity Regions
+The Stanford diagram plots each epoch's position error (PE) against its protection level (PL):
 
-The Stanford diagram is the signature visualization in GNSS integrity monitoring, showing how protection levels and position errors define operational safety.
-<img width="2590" height="2662" alt="stanford_diagram" src="https://github.com/user-attachments/assets/a945f2a9-bac9-4007-b843-62c895651958" />
+| Region | Condition | Meaning |
+|---|---|---|
+| Normal operation | PE < PL < AL | Error bounded, service available |
+| Misleading information (MI) | PL < PE < AL | Bound violated, but error still below the alert limit |
+| Hazardously misleading information (HMI) | PL < AL < PE | Error exceeds the alert limit with no alert, the case integrity monitoring exists to prevent |
+| System unavailable | PL > AL | Protection level too large: the service is declared unavailable |
 
+## Protection level vs. number of satellites
 
-**Four critical regions:**
-- **Normal Operation** (green): Position error and protection level both within limits
-- **Misleading Information** (yellow): System claims unavailable, but position is actually good
-- **Hazardously Misleading Information** (red): Undetected position error exceeds limits — the worst case scenario
-- **System Unavailable** (orange): Fault detected, alert raised
+![Protection levels](docs/protection_levels.png)
 
-### Protection Levels vs Satellite Count
+For one simulated geometry (fixed random seed), HPL drops below the 40 m horizontal alert limit once 7 satellites are in view. The exact count depends on geometry, so this is an illustration, not a general rule.
 
-More satellites dramatically improve integrity. This shows the engineering tradeoff between constellation size and alert limits.
-
-<img width="2961" height="1760" alt="protection_levels" src="https://github.com/user-attachments/assets/ac7308e3-3007-4335-8fe3-bbfbd64e11bd" />
-
-
-**Key insight:** At least 8 satellites are needed to meet Non-Precision Approach (NPA) integrity requirements (HAL = 40m).
-
-## Quick Example
-
-```python
-import numpy as np
-from src.raim import RAIM, RAIMConfig, create_satellite_geometry, simulate_pseudoranges
-
-# Set up RAIM with aviation parameters
-config = RAIMConfig(pfa=1e-5, pmd=1e-3, hal=40.0, val=50.0)
-raim = RAIM(config)
-
-# Simulate a receiver position and satellite constellation
-receiver_pos = np.array([-742000.0, -5462000.0, 3198000.0])  # ECEF
-sat_geometry = create_satellite_geometry(receiver_pos, num_satellites=8)
-
-# Generate measurements (with optional fault injection)
-satellites = simulate_pseudoranges(
-    receiver_pos, sat_geometry,
-    noise_std=2.0,
-    fault_prn=3,           # Inject fault on satellite PRN 3
-    fault_magnitude=50.0
-)
-
-# Run RAIM algorithm
-result = raim.exclude_fault(satellites)
-
-print(f"Status: {result.status.value}")
-print(f"HPL: {result.hpl:.1f} m (limit: {config.hal} m)")
-print(f"Satellites excluded: {result.excluded_prns}")
-```
-
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/OrbitAR7/gnss-integrity-raim.git
@@ -73,120 +37,54 @@ cd gnss-integrity-raim
 pip install -r requirements.txt
 ```
 
+```python
+import numpy as np
+from src.raim import RAIM, RAIMConfig, create_satellite_geometry, simulate_pseudoranges
+
+config = RAIMConfig(pfa=1e-5, pmd=1e-3, hal=40.0, val=50.0)
+raim = RAIM(config)
+
+receiver_pos = np.array([-742000.0, -5462000.0, 3198000.0])  # ECEF, m
+geometry = create_satellite_geometry(receiver_pos, num_satellites=8)
+sats = simulate_pseudoranges(receiver_pos, geometry, noise_std=2.0,
+                             fault_prn=3, fault_magnitude=50.0)  # inject a 50 m fault
+
+result = raim.exclude_fault(sats)
+print(result.status.value, f"HPL={result.hpl:.1f} m", "excluded:", result.excluded_prns)
+```
+
 ## Examples
 
-Three example scripts demonstrate different aspects of RAIM. Each generates publication-quality visualizations.
+| Script | Shows |
+|---|---|
+| `examples/basic_raim.py` | Sky plot, residuals with and without a fault, detection sensitivity |
+| `examples/fault_exclusion.py` | Step-by-step fault detection and exclusion |
+| `examples/protection_analysis.py` | Protection levels vs. satellite count, Stanford diagram, geometry impact |
 
-### 1. Basic Fault Detection
-```bash
-python examples/basic_raim.py
-```
-Shows how RAIM detects satellite faults through residual analysis and chi-square testing. Generates:
-- Satellite geometry (sky plot and 3D positions)
-- Residual bar charts for normal/faulty scenarios
-- Detection sensitivity curve
+Run them from the `examples/` folder; each saves PNG files there. `python generate_readme_plots.py` regenerates the two figures above in `docs/`.
 
-### 2. Fault Exclusion
-```bash
-python examples/fault_exclusion.py
-```
-Demonstrates the complete fault detection and exclusion (FDE) process with multiple scenarios. Generates:
-- Before/after comparison plots
-- Multi-step exclusion process visualization
+## Satellite requirements (snapshot RAIM, 4 unknowns)
 
-### 3. Protection Level Analysis
-```bash
-python examples/protection_analysis.py
-```
-Analyzes how protection levels behave with different geometries. Generates:
-- Protection levels vs satellite count
-- Stanford diagram
-- Geometry impact analysis
+| Satellites | Detection | Exclusion |
+|---|---|---|
+| 4 | No | No |
+| 5 | Yes | No |
+| 6+ | Yes | Yes |
 
-**Note:** All examples save PNG files in the current directory.
+## Limitations
 
-## Understanding the Output
+This is a learning implementation, not certified avionics software:
 
-### RAIMResult Object
-Every RAIM computation returns a `RAIMResult` with:
-- `status`: Current RAIM state (available, fault_detected, etc.)
-- `position`: Computed ECEF position
-- `hpl`, `vpl`: Horizontal and Vertical Protection Levels
-- `test_statistic`: Chi-square test value
-- `threshold`: Detection threshold
-- `residuals`: Per-satellite measurement residuals
-- `dop`: Dilution of Precision values (GDOP, HDOP, VDOP, etc.)
+- Protection levels use a single maximum slope over the full 3-D position, and VPL is approximated as 1.5 × HPL. A standards-grade implementation computes separate horizontal and vertical slopes.
+- Exclusion removes the largest residual rather than testing every subset, which can pick the wrong satellite in poor geometry.
+- Measurements are simulated with Gaussian noise and single-satellite step faults. There are no real receiver data, multipath models or multi-constellation weighting.
 
-### Protection Levels
-Protection levels define error bounds with specific confidence:
-- **HPL** (Horizontal Protection Level): horizontal position error bound
-- **VPL** (Vertical Protection Level): vertical position error bound
+Natural extensions include separate horizontal/vertical slopes, subset-based exclusion, ARAIM-style multiple-hypothesis protection levels, and real RINEX observations.
 
-If HPL < HAL (Horizontal Alert Limit), the solution meets integrity requirements.
+## Background
 
-## How It Works
-
-### Fault Detection
-1. Compute weighted least squares position solution
-2. Calculate residuals (observed - predicted measurements)
-3. Form chi-square test statistic from weighted residual sum
-4. Compare against threshold based on false alarm probability
-5. Fault detected if test statistic exceeds threshold
-
-### Fault Exclusion
-When a fault is detected:
-1. Identify satellite with largest residual
-2. Remove it from solution
-3. Recompute position and test statistic
-4. Repeat until no fault detected or too few satellites
-
-### Protection Levels
-Computed using:
-```
-HPL = slope_max × sqrt(threshold + bias_term)
-```
-where `slope_max` represents the worst-case positioning error sensitivity to measurement errors.
-
-## Satellite Requirements
-
-| Satellites | Fault Detection | Fault Exclusion |
-|------------|----------------|-----------------|
-| 4          | No             | No              |
-| 5          | Yes            | No              |
-| 6+         | Yes            | Yes             |
-
-Fault exclusion requires at least 6 satellites to maintain positioning after removing one faulty satellite.
-
-## Configuration Parameters
-
-Key `RAIMConfig` parameters:
-
-- `pfa`: Probability of false alarm (typically 1e-5)
-- `pmd`: Probability of missed detection (typically 1e-3)
-- `hal`: Horizontal Alert Limit in meters (40m for aviation NPA)
-- `val`: Vertical Alert Limit in meters (50m for aviation NPA)
-- `min_satellites`: Minimum satellites for RAIM (5 or more)
-- `use_weighted`: Use weighted least squares (recommended: True)
-
-## References
-
-This implementation follows standard RAIM algorithms used in aviation:
-- RTCA DO-229D (WAAS MOPS)
-- FAA TSO-C129a
-- Standard chi-square residual-based fault detection
-
-## Generating Documentation Plots
-
-To regenerate the README visualizations:
-
-```bash
-python generate_readme_plots.py
-```
-
-This creates high-quality figures in the `docs/` directory.
+The algorithms follow the classical residual-based (parity-space) RAIM approach used for GPS non-precision approach. See Brown, *A Baseline GPS RAIM Scheme* (NAVIGATION, 1992), and RTCA DO-229 for the operational context.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-
+MIT. See `LICENSE`.
