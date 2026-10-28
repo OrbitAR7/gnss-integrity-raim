@@ -1,230 +1,153 @@
 #!/usr/bin/env python3
 """
-Generate publication-quality visualizations for README
+Regenerate the README figures in docs/:
+
+- stanford_diagram.png: Monte Carlo Stanford diagram (HPL vs. true horizontal
+  error) after fault detection and exclusion, random geometries, 10% of epochs
+  with a single-satellite fault
+- protection_levels.png: HPL/VPL vs. number of satellites over random
+  geometries, against LPV-like and LNAV alert limits
+
+Also prints the availability table used in the README.
 """
 
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, Polygon
-from src.raim import RAIM, RAIMConfig, create_satellite_geometry, simulate_pseudoranges
+from matplotlib.colors import LogNorm
 
-# Publication-quality settings
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
-plt.rcParams['font.size'] = 11
-plt.rcParams['axes.linewidth'] = 1.2
-plt.rcParams['grid.alpha'] = 0.25
-plt.rcParams['grid.linestyle'] = ':'
-plt.rcParams['lines.linewidth'] = 2
+from gnss_raim import (RAIM, RAIMConfig, RAIMStatus, create_satellite_geometry,
+                       enu_rotation, simulate_pseudoranges, stanford_region)
 
-# Color-blind safe palette (from ColorBrewer)
+RX = np.array([-742000.0, -5462000.0, 3198000.0])
+HAL_LPV, VAL_LPV, HAL_LNAV = 40.0, 50.0, 556.0
+OUT = Path(__file__).resolve().parent / "docs"
+
 COLORS = {
-    'safe_green': '#4daf4a',   # Standardized green for safe/acceptable/nominal regions (both figures)
-    'warning': '#ff7f00',      # Orange (misleading info)
-    'danger': '#e41a1c',       # Red (HMI)
-    'unavailable': '#984ea3',  # Purple (system unavailable)
-    'hpl': '#377eb8',          # Blue (horizontal)
-    'vpl': '#e41a1c',          # Red (vertical)
-    'threshold': '#333333',    # Dark gray (limits)
-    'grid': '#cccccc'          # Light gray (gridlines)
+    'normal': '#4daf4a',
+    'misleading': '#ff7f00',
+    'hazardous': '#e41a1c',
+    'unavailable': '#984ea3',
+    'hpl': '#377eb8',
+    'vpl': '#e41a1c',
 }
 
 
-def generate_stanford_diagram():
-    """Create publication-quality Stanford diagram for GNSS integrity"""
-    print("Generating Stanford diagram...")
-    
-    fig, ax = plt.subplots(figsize=(9, 9))
-    
-    hal = 40.0
-    
-    # Integrity regions (x = protection level, y = position error), standard Stanford-diagram definitions:
-    #   Normal operation:              PE < HPL < HAL
-    #   Misleading Information (MI):   HPL < PE,  HPL < HAL, PE < HAL
-    #   Hazardously Misleading (HMI):  HPL < HAL, PE > HAL
-    #   System unavailable:            HPL > HAL  (alert raised / service unavailable)
-    top = 125
-    ax.add_patch(Polygon([(0, 0), (hal, 0), (hal, hal)], closed=True,
-                         facecolor=COLORS['safe_green'], alpha=0.25, edgecolor='none'))
-    ax.text(hal*0.72, hal*0.42, 'Normal\nOperation', ha='center', va='center', fontsize=12, fontweight='600')
-
-    ax.add_patch(Polygon([(0, 0), (hal, hal), (0, hal)], closed=True,
-                         facecolor=COLORS['warning'], alpha=0.25, edgecolor='none'))
-    ax.text(hal*0.3, hal*0.75, 'Misleading\nInformation', ha='center', va='center', fontsize=11, fontweight='600')
-
-    ax.add_patch(Rectangle((0, hal), hal, top - hal,
-                           facecolor=COLORS['danger'], alpha=0.25, edgecolor='none'))
-    ax.text(hal/2, hal+40, 'Hazardously Misleading\nInformation (HMI)',
-            ha='center', va='center', fontsize=12, fontweight='600', color='#8B0000')
-
-    ax.add_patch(Rectangle((hal, 0), top - hal, top,
-                           facecolor=COLORS['unavailable'], alpha=0.2, edgecolor='none'))
-    ax.text(hal+40, hal+40, 'System\nUnavailable', ha='center', va='center', fontsize=12, fontweight='700', color='#1a0d20')
-
-    # PE = HPL diagonal separates bounded from misleading solutions
-    ax.plot([0, top], [0, top], color=COLORS['threshold'], linestyle='-', linewidth=1.2, zorder=5)
-    ax.text(100, 106, 'PE = HPL', fontsize=10, rotation=45, ha='center', va='center')
-
-    # Critical threshold lines - thinner than region boundaries (1.8 vs potential 2.5)
-    ax.axhline(hal, color=COLORS['threshold'], linestyle='--', linewidth=1.8, 
-               label='Alert Limit (HAL)', zorder=5)
-    ax.axvline(hal, color=COLORS['threshold'], linestyle='--', linewidth=1.8, zorder=5)
-    
-    # Threshold labels - positioned cleanly
-    ax.text(hal, -2.5, 'HAL', fontsize=11, fontweight='600', ha='center', va='top')
-    ax.text(-2.5, hal, 'HAL', fontsize=11, fontweight='600', ha='right', va='center')
-    
-    # Plot representative operational points - reduced marker sizes by ~12%
-    examples = [
-        (22, 12, 'Nominal', COLORS['safe_green'], 'o', 9.5),
-        (15, 70, 'HMI Risk', COLORS['danger'], 'X', 10.5),
-        (85, 30, 'Unavailable', COLORS['unavailable'], 's', 8)
-    ]
-    
-    for hpl, pe, label, color, marker, msize in examples:
-        ax.plot(hpl, pe, marker, markersize=msize, color=color, 
-                markeredgecolor='white', markeredgewidth=1.5, zorder=10)
-        
-        # Minimal annotations with arrows
-        if label == 'Nominal':
-            ax.text(hpl + 2, pe - 6, label, fontsize=10, color=color, fontweight='600')
-        elif label == 'HMI Risk':
-            ax.annotate('', xy=(hpl, pe), xytext=(8, 95),
-                       arrowprops=dict(arrowstyle='->', lw=1.5, color=color))
-            ax.text(8, 97, label, fontsize=10, color=color, fontweight='600')
-    
-    ax.set_xlabel('Horizontal Protection Level, HPL (m)', fontsize=12, fontweight='600')
-    ax.set_ylabel('Position Error, PE (m)', fontsize=12, fontweight='600')
-    
-    # Title hierarchy: bold 700 for title
-    ax.set_title('Stanford Integrity Diagram (Horizontal Plane)', 
-                 fontsize=14, fontweight='700', pad=15)
-    
-    ax.set_xlim(-5, 125)
-    ax.set_ylim(-5, 125)
-    ax.grid(True, alpha=0.2, linestyle=':', linewidth=0.8, color=COLORS['grid'])
-    ax.set_aspect('equal')
-    
-    # Simplified annotation
-    textstr = 'Goal: Minimize P(HMI)'
-    props = dict(boxstyle='round,pad=0.5', facecolor='white', 
-                 alpha=0.9, edgecolor=COLORS['threshold'], linewidth=1.5)
-    ax.text(0.98, 0.02, textstr, transform=ax.transAxes, fontsize=10,
-            verticalalignment='bottom', horizontalalignment='right', 
-            bbox=props, style='italic')
-    
-    # Clean up spines
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    
-    plt.tight_layout()
-    
-    # Export as high-resolution PNG (300 DPI)
-    plt.savefig('docs/stanford_diagram.png', dpi=300, bbox_inches='tight', facecolor='white')
-    print("✓ Saved: docs/stanford_diagram.png")
-    plt.close()
+def elevation_sigma(sats):
+    """1-sigma pseudorange error growing toward the horizon."""
+    return [1.0 / np.sin(np.radians(s.elevation)) for s in sats]
 
 
-def generate_protection_levels_plot():
-    """Generate publication-quality protection levels vs satellite count"""
-    print("Generating protection levels plot...")
-    
-    config = RAIMConfig(pfa=1e-5, pmd=1e-3, hal=40.0, val=50.0)
-    raim = RAIM(config)
-    receiver_pos = np.array([-742000.0, -5462000.0, 3198000.0])
-    
-    n_sats_range = range(5, 13)
-    hpls = []
-    vpls = []
-    
-    for n_sats in n_sats_range:
-        sat_geometry = create_satellite_geometry(receiver_pos, num_satellites=n_sats, seed=42)
-        satellites = simulate_pseudoranges(receiver_pos, sat_geometry, noise_std=2.0, seed=100)
-        result = raim.detect_fault(satellites)
-        
-        hpls.append(result.hpl)
-        vpls.append(result.vpl)
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Plot protection levels with reduced marker sizes (~12% smaller)
-    ax.plot(n_sats_range, hpls, 'o-', linewidth=2.5, markersize=7, 
-            color=COLORS['hpl'], label='HPL', markeredgecolor='white', 
-            markeredgewidth=1.5, zorder=3)
-    ax.plot(n_sats_range, vpls, 's-', linewidth=2.5, markersize=7, 
-            color=COLORS['vpl'], label='VPL', markeredgecolor='white', 
-            markeredgewidth=1.5, zorder=3)
-    
-    # Alert limit reference lines - clean and minimal
-    ax.axhline(config.hal, color=COLORS['hpl'], linestyle='--', linewidth=2, 
-               alpha=0.7, label='HAL (40 m)', zorder=2)
-    ax.axhline(config.val, color=COLORS['vpl'], linestyle='--', linewidth=2, 
-               alpha=0.7, label='VAL (50 m)', zorder=2)
-    
-    # Subtle shading for acceptable region (using standardized green)
-    ax.fill_between(n_sats_range, 1, config.hal, alpha=0.08, 
-                    color=COLORS['safe_green'], zorder=1)
-    
-    ax.set_xlabel('Number of Satellites', fontsize=12, fontweight='600')
-    ax.set_ylabel('Protection Level (m)', fontsize=12, fontweight='600')
-    
-    # Title hierarchy: bold 700 for title
-    ax.set_title('Protection Levels vs Satellite Count (simulated geometry)', 
-                 fontsize=14, fontweight='700', pad=12)
-    
-    # Legend with lighter border and subtle transparency
-    legend = ax.legend(fontsize=10, loc='upper right', framealpha=0.92, 
-                       edgecolor='#bbbbbb', fancybox=False, frameon=True)
-    legend.get_frame().set_linewidth(1.0)
-    
-    ax.grid(True, alpha=0.2, which='both', linestyle=':', linewidth=0.8, 
-            color=COLORS['grid'])
-    ax.set_yscale('log')
-    ax.set_ylim(15, 300)
-    ax.set_xlim(4.8, 12.2)
-    ax.set_xticks(n_sats_range)
-    
-    # Annotate the first satellite count whose HPL is below HAL (computed, not hard-coded)
-    n_list = list(n_sats_range)
-    ok = [n for n, h in zip(n_list, hpls) if h < config.hal]
-    n_ok = ok[0] if ok else n_list[-1]
-    ax.annotate(f'HPL < HAL from {n_ok} satellites\n(this simulated geometry)',
-                xy=(n_ok, hpls[n_list.index(n_ok)]), xytext=(9.6, 22),
-                arrowprops=dict(arrowstyle='->', lw=1.5, color=COLORS['safe_green']),
-                fontsize=10, color=COLORS['safe_green'], fontweight='600',
-                bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 
-                         alpha=0.9, edgecolor=COLORS['safe_green'], linewidth=1.5))
-    
-    # Clean up spines
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    
-    plt.tight_layout()
-    
-    # Export as high-resolution PNG (300 DPI)
-    plt.savefig('docs/protection_levels.png', dpi=300, bbox_inches='tight', facecolor='white')
-    print("✓ Saved: docs/protection_levels.png")
-    plt.close()
+def stanford_diagram(n_epochs=20000, fault_rate=0.10, seed=2026):
+    rng = np.random.default_rng(seed)
+    raim = RAIM(RAIMConfig.lpv_like(pfa=1e-5, pmd=1e-3))
+    R = enu_rotation(RX)
+
+    hpl, hpe, n_alert, n_faulty = [], [], 0, 0
+    for _ in range(n_epochs):
+        geom = create_satellite_geometry(RX, int(rng.integers(6, 11)), min_elevation=10.0, rng=rng)
+        faulty = rng.random() < fault_rate
+        n_faulty += faulty
+        sats = simulate_pseudoranges(
+            RX, geom, noise_std=elevation_sigma(geom),
+            fault_prn=int(rng.integers(1, len(geom) + 1)) if faulty else None,
+            fault_magnitude=float(rng.uniform(0, 200)) if faulty else 0.0, rng=rng)
+        res = raim.exclude_fault(sats, RX)
+        if res.status in (RAIMStatus.FAULT_DETECTED, RAIMStatus.UNAVAILABLE):
+            n_alert += 1          # alert raised, no position used
+            continue
+        hpl.append(res.hpl)
+        hpe.append(np.linalg.norm((R @ (res.position - RX))[:2]))
+
+    hpl, hpe = np.array(hpl), np.array(hpe)
+    regions = [stanford_region(e, p, HAL_LPV) for e, p in zip(hpe, hpl)]
+    counts = {k: regions.count(k) for k in
+              ("normal", "misleading", "hazardous", "unavailable", "unavailable_mi")}
+
+    fig, ax = plt.subplots(figsize=(8.5, 7.5))
+    top = 120
+    bins = np.linspace(0, top, 121)
+    h = ax.hist2d(hpl, hpe, bins=[bins, bins], norm=LogNorm(), cmap="viridis", cmin=1)
+    fig.colorbar(h[3], ax=ax, label="epochs per 1 m x 1 m bin")
+
+    ax.plot([0, top], [0, top], color="k", lw=1)
+    ax.axvline(HAL_LPV, color="k", ls="--", lw=1.2)
+    ax.axhline(HAL_LPV, color="k", ls="--", lw=1.2, xmax=HAL_LPV / top)
+    label = dict(fontsize=10, fontweight="600", ha="center", va="center")
+    ax.text(34, 24, f"Normal\noperation\n{counts['normal']}", color=COLORS['normal'], **label)
+    ax.text(12, 33, f"MI\n{counts['misleading']}", color=COLORS['misleading'], **label)
+    ax.text(20, 80, f"HMI\n{counts['hazardous']}", color=COLORS['hazardous'], **label)
+    ax.text(85, 25, f"Unavailable\n{counts['unavailable']}", color=COLORS['unavailable'], **label)
+    ax.text(62, 105, f"Unavailable + MI\n{counts['unavailable_mi']}", color=COLORS['unavailable'], **label)
+    ax.text(HAL_LPV + 1, top - 3, "HAL = 40 m", fontsize=9, va="top")
+
+    ax.set_xlim(0, top)
+    ax.set_ylim(0, top)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Horizontal protection level, HPL (m)")
+    ax.set_ylabel("Horizontal position error, HPE (m)")
+    alerts = (f"{n_alert} epochs left in alert (not plotted)" if n_alert
+              else "every detected fault was excluded")
+    ax.set_title(f"Stanford diagram: {n_epochs} epochs after FDE\n"
+                 f"6-10 satellites, {int(fault_rate * 100)}% of epochs with a 0-200 m fault, "
+                 f"{alerts}", fontsize=11)
+    fig.tight_layout()
+    fig.savefig(OUT / "stanford_diagram.png", dpi=200, facecolor="white")
+    plt.close(fig)
+
+    print(f"Stanford diagram: {len(hpl)} plotted, {n_alert} alerts, {n_faulty} faulty epochs")
+    print("  " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+    print(f"  max HPE/HPL = {np.max(hpe / hpl):.2f}")
 
 
-def main():
-    print("\n" + "="*60)
-    print("  Generating README Visualizations")
-    print("="*60 + "\n")
-    
-    import os
-    os.makedirs('docs', exist_ok=True)
-    
-    generate_stanford_diagram()
-    generate_protection_levels_plot()
-    
-    print("\n" + "="*60)
-    print("  ✓ All visualizations generated successfully!")
-    print("="*60 + "\n")
+def protection_levels(n_geometries=500, seed=7):
+    rng = np.random.default_rng(seed)
+    raim = RAIM(RAIMConfig(pfa=1e-5, pmd=1e-3))
+    ns = np.arange(5, 13)
+    H = np.zeros((len(ns), n_geometries))
+    V = np.zeros_like(H)
+    for a, n in enumerate(ns):
+        for b in range(n_geometries):
+            geom = create_satellite_geometry(RX, int(n), min_elevation=10.0, rng=rng)
+            sats = simulate_pseudoranges(RX, geom, noise_std=elevation_sigma(geom), rng=rng)
+            r = raim.detect_fault(sats, RX)
+            H[a, b], V[a, b] = r.hpl, r.vpl
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for arr, name, c in ((H, "HPL", COLORS['hpl']), (V, "VPL", COLORS['vpl'])):
+        med = np.median(arr, axis=1)
+        lo, hi = np.percentile(arr, [10, 90], axis=1)
+        ax.fill_between(ns, lo, hi, color=c, alpha=0.15)
+        ax.plot(ns, med, "o-", color=c, label=f"{name} (median, 10-90% band)")
+    ax.axhline(HAL_LPV, color=COLORS['hpl'], ls="--", label="HAL 40 m (LPV-like)")
+    ax.axhline(VAL_LPV, color=COLORS['vpl'], ls="--", label="VAL 50 m (LPV-like)")
+    ax.axhline(HAL_LNAV, color="k", ls=":", label="HAL 556 m (LNAV / NPA)")
+    ax.set_yscale("log")
+    ax.set_ylim(10, 5000)
+    ax.set_xticks(ns)
+    ax.set_xlabel("Number of satellites")
+    ax.set_ylabel("Protection level (m)")
+    ax.set_title(f"Protection levels over {n_geometries} random geometries per point "
+                 "(Pfa 1e-5, Pmd 1e-3)", fontsize=11)
+    ax.legend(fontsize=9, loc="upper right")
+    ax.grid(True, which="both", alpha=0.25, ls=":")
+    fig.tight_layout()
+    fig.savefig(OUT / "protection_levels.png", dpi=200, facecolor="white")
+    plt.close(fig)
+
+    print("\n| Satellites | median HPL (m) | HPL <= 556 m (LNAV) | HPL <= 40 m | HPL <= 40 m and VPL <= 50 m |")
+    print("|---|---|---|---|---|")
+    for a, n in enumerate(ns):
+        print(f"| {n} | {np.median(H[a]):.0f} | {np.mean(H[a] <= HAL_LNAV):.0%} | "
+              f"{np.mean(H[a] <= HAL_LPV):.0%} | {np.mean((H[a] <= HAL_LPV) & (V[a] <= VAL_LPV)):.0%} |")
 
 
 if __name__ == "__main__":
-    main()
+    OUT.mkdir(exist_ok=True)
+    stanford_diagram()
+    protection_levels()
