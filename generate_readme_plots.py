@@ -8,7 +8,7 @@ sys.path.insert(0, '..')
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Polygon
 from src.raim import RAIM, RAIMConfig, create_satellite_geometry, simulate_pseudoranges
 
 # Publication-quality settings
@@ -41,31 +41,33 @@ def generate_stanford_diagram():
     
     hal = 40.0
     
-    # Define the four integrity regions with subtle colors (using standardized green)
-    # Region 1: Normal Operation
-    ax.add_patch(Rectangle((0, 0), hal, hal, 
-                          facecolor=COLORS['safe_green'], alpha=0.25, edgecolor='none'))
-    ax.text(hal/2, hal/2, 'Normal\nOperation', 
-            ha='center', va='center', fontsize=13, fontweight='600')
-    
-    # Region 2: Misleading Information
-    ax.add_patch(Rectangle((hal, 0), 80, hal, 
-                          facecolor=COLORS['warning'], alpha=0.25, edgecolor='none'))
-    ax.text(hal+40, hal/2, 'Misleading\nInformation', 
-            ha='center', va='center', fontsize=13, fontweight='600')
-    
-    # Region 3: Hazardously Misleading Information (HMI) - full standards-compliant term
-    ax.add_patch(Rectangle((0, hal), hal, 80, 
-                          facecolor=COLORS['danger'], alpha=0.25, edgecolor='none'))
-    ax.text(hal/2, hal+40, 'Hazardously Misleading\nInformation (HMI)', 
+    # Integrity regions (x = protection level, y = position error), standard Stanford-diagram definitions:
+    #   Normal operation:              PE < HPL < HAL
+    #   Misleading Information (MI):   HPL < PE,  HPL < HAL, PE < HAL
+    #   Hazardously Misleading (HMI):  HPL < HAL, PE > HAL
+    #   System unavailable:            HPL > HAL  (alert raised / service unavailable)
+    top = 125
+    ax.add_patch(Polygon([(0, 0), (hal, 0), (hal, hal)], closed=True,
+                         facecolor=COLORS['safe_green'], alpha=0.25, edgecolor='none'))
+    ax.text(hal*0.72, hal*0.42, 'Normal\nOperation', ha='center', va='center', fontsize=12, fontweight='600')
+
+    ax.add_patch(Polygon([(0, 0), (hal, hal), (0, hal)], closed=True,
+                         facecolor=COLORS['warning'], alpha=0.25, edgecolor='none'))
+    ax.text(hal*0.3, hal*0.75, 'Misleading\nInformation', ha='center', va='center', fontsize=11, fontweight='600')
+
+    ax.add_patch(Rectangle((0, hal), hal, top - hal,
+                           facecolor=COLORS['danger'], alpha=0.25, edgecolor='none'))
+    ax.text(hal/2, hal+40, 'Hazardously Misleading\nInformation (HMI)',
             ha='center', va='center', fontsize=12, fontweight='600', color='#8B0000')
-    
-    # Region 4: System Unavailable - increased contrast with darker text
-    ax.add_patch(Rectangle((hal, hal), 80, 80, 
-                          facecolor=COLORS['unavailable'], alpha=0.2, edgecolor='none'))
-    ax.text(hal+40, hal+40, 'System\nUnavailable', 
-            ha='center', va='center', fontsize=12, fontweight='700', color='#1a0d20')
-    
+
+    ax.add_patch(Rectangle((hal, 0), top - hal, top,
+                           facecolor=COLORS['unavailable'], alpha=0.2, edgecolor='none'))
+    ax.text(hal+40, hal+40, 'System\nUnavailable', ha='center', va='center', fontsize=12, fontweight='700', color='#1a0d20')
+
+    # PE = HPL diagonal separates bounded from misleading solutions
+    ax.plot([0, top], [0, top], color=COLORS['threshold'], linestyle='-', linewidth=1.2, zorder=5)
+    ax.text(100, 106, 'PE = HPL', fontsize=10, rotation=45, ha='center', va='center')
+
     # Critical threshold lines - thinner than region boundaries (1.8 vs potential 2.5)
     ax.axhline(hal, color=COLORS['threshold'], linestyle='--', linewidth=1.8, 
                label='Alert Limit (HAL)', zorder=5)
@@ -79,7 +81,7 @@ def generate_stanford_diagram():
     examples = [
         (22, 12, 'Nominal', COLORS['safe_green'], 'o', 9.5),
         (15, 70, 'HMI Risk', COLORS['danger'], 'X', 10.5),
-        (85, 85, 'Detected', COLORS['unavailable'], 's', 8)
+        (85, 30, 'Unavailable', COLORS['unavailable'], 's', 8)
     ]
     
     for hpl, pe, label, color, marker, msize in examples:
@@ -88,9 +90,7 @@ def generate_stanford_diagram():
         
         # Minimal annotations with arrows
         if label == 'Nominal':
-            ax.annotate('', xy=(hpl, pe), xytext=(10, 25),
-                       arrowprops=dict(arrowstyle='->', lw=1.5, color=color))
-            ax.text(10, 27, label, fontsize=10, color=color, fontweight='600')
+            ax.text(hpl + 2, pe - 6, label, fontsize=10, color=color, fontweight='600')
         elif label == 'HMI Risk':
             ax.annotate('', xy=(hpl, pe), xytext=(8, 95),
                        arrowprops=dict(arrowstyle='->', lw=1.5, color=color))
@@ -172,7 +172,7 @@ def generate_protection_levels_plot():
     ax.set_ylabel('Protection Level (m)', fontsize=12, fontweight='600')
     
     # Title hierarchy: bold 700 for title
-    ax.set_title('Protection Levels vs Satellite Count (NPA Integrity)', 
+    ax.set_title('Protection Levels vs Satellite Count (simulated geometry)', 
                  fontsize=14, fontweight='700', pad=12)
     
     # Legend with lighter border and subtle transparency
@@ -187,10 +187,12 @@ def generate_protection_levels_plot():
     ax.set_xlim(4.8, 12.2)
     ax.set_xticks(n_sats_range)
     
-    # Annotation pointing precisely at HPL value at N=8
-    hpl_at_8 = hpls[3]  # Index 3 corresponds to n_sats=8
-    ax.annotate('NPA integrity satisfied at ≥8 satellites', 
-                xy=(8, hpl_at_8), xytext=(9.8, 25),
+    # Annotate the first satellite count whose HPL is below HAL (computed, not hard-coded)
+    n_list = list(n_sats_range)
+    ok = [n for n, h in zip(n_list, hpls) if h < config.hal]
+    n_ok = ok[0] if ok else n_list[-1]
+    ax.annotate(f'HPL < HAL from {n_ok} satellites\n(this simulated geometry)',
+                xy=(n_ok, hpls[n_list.index(n_ok)]), xytext=(9.6, 22),
                 arrowprops=dict(arrowstyle='->', lw=1.5, color=COLORS['safe_green']),
                 fontsize=10, color=COLORS['safe_green'], fontweight='600',
                 bbox=dict(boxstyle='round,pad=0.4', facecolor='white', 

@@ -11,7 +11,7 @@ sys.path.insert(0, '..')
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Polygon
 from src.raim import (
     RAIM, RAIMConfig,
     simulate_pseudoranges, create_satellite_geometry
@@ -75,38 +75,37 @@ def plot_stanford_diagram():
     
     hal = 40.0  # meters
     
-    # Define regions
-    # Region 1: Normal operation (PE < HPL < HAL)
-    ax.add_patch(Rectangle((0, 0), hal, hal, facecolor='green', alpha=0.3))
-    ax.text(hal/2, hal/2, 'Normal\nOperation', ha='center', va='center', 
-            fontsize=14, fontweight='bold')
-    
-    # Region 2: Misleading Information (HPL > HAL, PE < HAL)
-    ax.add_patch(Rectangle((hal, 0), 60, hal, facecolor='yellow', alpha=0.3))
-    ax.text(hal+30, hal/2, 'Misleading\nInformation\n(MI)', ha='center', va='center', 
-            fontsize=12, fontweight='bold')
-    
-    # Region 3: Hazardously Misleading Information (PE > HAL, no alert)
-    ax.add_patch(Rectangle((0, hal), hal, 60, facecolor='red', alpha=0.3))
-    ax.text(hal/2, hal+30, 'Hazardously\nMisleading\nInformation\n(HMI)', 
+    # Standard Stanford-diagram regions (x = HPL, y = PE):
+    #   Normal operation: PE < HPL < HAL      MI: HPL < PE < HAL
+    #   HMI: HPL < HAL < PE                   Unavailable: HPL > HAL
+    ax.add_patch(Polygon([(0, 0), (hal, 0), (hal, hal)], closed=True, facecolor='green', alpha=0.3))
+    ax.text(hal*0.68, hal*0.25, 'Normal\nOperation', ha='center', va='center',
+            fontsize=13, fontweight='bold')
+
+    ax.add_patch(Polygon([(0, 0), (hal, hal), (0, hal)], closed=True, facecolor='yellow', alpha=0.3))
+    ax.text(hal*0.3, hal*0.75, 'Misleading\nInformation\n(MI)', ha='center', va='center',
+            fontsize=11, fontweight='bold')
+
+    ax.add_patch(Rectangle((0, hal), hal, 100 - hal, facecolor='red', alpha=0.3))
+    ax.text(hal/2, hal+30, 'Hazardously\nMisleading\nInformation\n(HMI)',
             ha='center', va='center', fontsize=12, fontweight='bold', color='darkred')
-    
-    # Region 4: Alert (fault detected, PE may be large)
-    ax.add_patch(Rectangle((hal, hal), 60, 60, facecolor='orange', alpha=0.3))
-    ax.text(hal+30, hal+30, 'Alert\n(Fault Detected)', ha='center', va='center', 
+
+    ax.add_patch(Rectangle((hal, 0), 100 - hal, 100, facecolor='orange', alpha=0.3))
+    ax.text(hal+30, hal+30, 'System\nUnavailable\n(HPL > HAL)', ha='center', va='center',
             fontsize=12, fontweight='bold')
-    
-    # Add threshold lines
-    ax.axhline(hal, color='black', linestyle='-', linewidth=2, label='HAL')
+
+    # Threshold lines and the PE = HPL diagonal
+    ax.axhline(hal, color='black', linestyle='-', linewidth=2, label='PE = HAL')
     ax.axvline(hal, color='black', linestyle='-', linewidth=2, label='HPL = HAL')
-    
+    ax.plot([0, 100], [0, 100], color='black', linestyle='--', linewidth=1.2, label='PE = HPL')
+
     # Add example points
     examples = [
-        (15, 12, 'Good\nSolution', 'blue'),
-        (25, 35, 'Borderline', 'orange'),
-        (75, 15, 'No Integrity', 'brown'),
+        (25, 12, 'Good\nSolution', 'blue'),
+        (15, 30, 'Misleading\n(PE > HPL)', 'orange'),
+        (75, 15, 'Unavailable', 'brown'),
         (20, 55, 'HMI!\n(Worst Case)', 'red'),
-        (65, 75, 'Fault\nDetected', 'purple')
+        (65, 75, 'Unavailable,\nlarge error', 'purple')
     ]
     
     for hpl, pe, label, color in examples:
