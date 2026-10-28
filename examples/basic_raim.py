@@ -7,11 +7,12 @@ on measurement residuals.
 """
 
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import matplotlib.pyplot as plt
-from src.raim import (
+from gnss_raim import (
     RAIM, RAIMConfig, Satellite,
     simulate_pseudoranges, create_satellite_geometry
 )

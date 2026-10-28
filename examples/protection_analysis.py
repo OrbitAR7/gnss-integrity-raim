@@ -7,12 +7,13 @@ the Stanford diagram concept for integrity monitoring.
 """
 
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Polygon
-from src.raim import (
+from gnss_raim import (
     RAIM, RAIMConfig,
     simulate_pseudoranges, create_satellite_geometry
 )

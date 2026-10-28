@@ -8,11 +8,12 @@ until the solution becomes reliable again.
 """
 
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import matplotlib.pyplot as plt
-from src.raim import (
+from gnss_raim import (
     RAIM, RAIMConfig, RAIMStatus,
     simulate_pseudoranges, create_satellite_geometry
 )
@@ -45,8 +46,7 @@ def plot_fde_comparison(result_before, result_after, receiver_pos):
     
     # Residuals after exclusion
     prns_after = [prn for prn in prns_before if prn not in result_after.excluded_prns]
-    residuals_after = [result_after.residuals[i] for i, prn in enumerate(prns_before) 
-                      if prn not in result_after.excluded_prns]
+    residuals_after = list(result_after.residuals)  # same order as prns_after
     colors_after = ['blue' for _ in residuals_after]
     
     ax2.bar(prns_after, residuals_after, color=colors_after, 

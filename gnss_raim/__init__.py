@@ -11,10 +11,13 @@ from .raim import (
     RAIMStatus,
     Satellite,
     simulate_pseudoranges,
-    create_satellite_geometry
+    create_satellite_geometry,
+    stanford_region,
+    enu_rotation,
+    ecef_to_geodetic,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Hamoud Alshammari"
 
 __all__ = [
@@ -24,5 +27,8 @@ __all__ = [
     'RAIMStatus',
     'Satellite',
     'simulate_pseudoranges',
-    'create_satellite_geometry'
+    'create_satellite_geometry',
+    'stanford_region',
+    'enu_rotation',
+    'ecef_to_geodetic',
 ]

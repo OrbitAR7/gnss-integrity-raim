@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnss-raim"
+version = "1.1.0"
+description = "Snapshot RAIM: chi-square fault detection and exclusion, protection levels, Stanford diagram"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Hamoud Alshammari"}]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.20", "scipy>=1.7"]
+
+[project.optional-dependencies]
+plots = ["matplotlib>=3.3"]
+test = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/OrbitAR7/gnss-integrity-raim"
+
+[tool.setuptools]
+packages = ["gnss_raim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
